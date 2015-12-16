@@ -9,14 +9,17 @@ module Network.Wai.Handler.Warp.HTTP2.Receiver (frameReceiver) where
 #if __GLASGOW_HASKELL__ < 709
 import Control.Applicative
 #endif
+import Control.Concurrent
 import Control.Concurrent.STM
+import Control.Monad (void)
 import qualified Control.Exception as E
-import Control.Monad (when, unless, void)
+import Control.Monad (when, unless)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Maybe (isJust)
 import Network.HTTP2
 import Network.HTTP2.Priority
+import Network.Wai
 import Network.Wai.Handler.Warp.HTTP2.EncodeFrame
 import Network.Wai.Handler.Warp.HTTP2.HPACK
 import Network.Wai.Handler.Warp.HTTP2.Request
@@ -26,15 +29,15 @@ import Network.Wai.Handler.Warp.Types
 
 ----------------------------------------------------------------
 
-frameReceiver :: Context -> MkReq -> (BufSize -> IO ByteString) -> IO ()
-frameReceiver ctx mkreq recvN = loop `E.catch` sendGoaway
+frameReceiver :: Context -> MkReq -> (BufSize -> IO ByteString)
+              -> (Stream -> Request -> IO ()) -> IO ()
+frameReceiver ctx mkreq recvN worker = loop `E.catch` sendGoaway
   where
     Context{ http2settings
            , streamTable
            , concurrency
            , continued
            , currentStreamId
-           , inputQ
            , outputQ
            } = ctx
     sendGoaway e
@@ -106,7 +109,7 @@ frameReceiver ctx mkreq recvN = loop `E.catch` sendGoaway
                           writeIORef streamPrecedence $ toPrecedence pri
                           writeIORef streamState HalfClosed
                           let !req = mkreq vh (return "")
-                          atomically $ writeTQueue inputQ $ Input strm req
+                          void $ forkIO $ worker strm req
                       Nothing -> E.throwIO $ StreamError ProtocolError streamId
               Open (HasBody hdr pri) -> do
                   resetContinued
@@ -119,7 +122,7 @@ frameReceiver ctx mkreq recvN = loop `E.catch` sendGoaway
                           readQ <- newReadBody q
                           bodySource <- mkSource readQ
                           let !req = mkreq vh (readSource bodySource)
-                          atomically $ writeTQueue inputQ $ Input strm req
+                          void $ forkIO $ worker strm req
                       Nothing -> E.throwIO $ StreamError ProtocolError streamId
               s@(Open Continued{}) -> do
                   setContinued

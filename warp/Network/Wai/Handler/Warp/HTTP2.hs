@@ -5,13 +5,12 @@ module Network.Wai.Handler.Warp.HTTP2 (isHTTP2, http2) where
 
 import Control.Concurrent (forkIO, killThread)
 import qualified Control.Exception as E
-import Control.Monad (when, unless, replicateM_)
+import Control.Monad (when, unless)
 import Data.ByteString (ByteString)
 import Network.HTTP2
 import Network.Socket (SockAddr)
 import Network.Wai
 import Network.Wai.Handler.Warp.HTTP2.EncodeFrame
-import Network.Wai.Handler.Warp.HTTP2.Manager
 import Network.Wai.Handler.Warp.HTTP2.Receiver
 import Network.Wai.Handler.Warp.HTTP2.Request
 import Network.Wai.Handler.Warp.HTTP2.Sender
@@ -29,21 +28,16 @@ http2 conn ii addr transport settings readN app = do
     when ok $ do
         ctx <- newContext
         -- Workers, worker manager and timer manager
-        mgr <- start settings
-        let responder = response ii settings ctx mgr
+        let responder = response ii settings ctx
             action = worker ctx settings app responder
-        setAction mgr action
-        -- fixme: hard coding: 10
-        replicateM_ 10 $ spawnAction mgr
         -- Receiver
         let mkreq = mkRequest ii settings addr
-        tid <- forkIO $ frameReceiver ctx mkreq readN
+        tid <- forkIO $ frameReceiver ctx mkreq readN action
         -- Sender
         -- frameSender is the main thread because it ensures to send
         -- a goway frame.
         frameSender ctx conn ii settings `E.finally` do
             clearContext ctx
-            stop mgr
             killThread tid
   where
     checkTLS = case transport of
